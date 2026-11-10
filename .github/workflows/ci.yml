@@ -218,6 +218,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # No `version:` — pnpm/action-setup reads `packageManager` from the
+      # workspace manifest, so the pnpm version has exactly one source of truth
+      # (typescript/package.json). `package_json_file` is required because the
+      # pnpm workspace root is typescript/, not the repo root.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: typescript/package.json
+
       # No dedicated Bazel cache action: Bazel's own output base is the cache.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
