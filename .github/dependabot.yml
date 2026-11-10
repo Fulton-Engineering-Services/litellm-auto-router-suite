@@ -11,6 +11,18 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # `typescript` is pinned to ~6.0.3 deliberately: typescript-eslint 8.72.2
+    # declares peer `>=4.8.4 <6.1.0` and its parser throws "typescript-eslint
+    # does not support TS 7.0", which is exactly what the lint:tsdoc gate runs.
+    # Dependabot rewrites the requirement, not just the lockfile, so a 7.x
+    # proposal would redden the required `TypeScript` check -- and with strict
+    # required checks that freezes every subsequent PR. Only >=7 is held back,
+    # so 6.0.x patches (including security ones) still arrive. When a
+    # typescript-eslint release admits TS 7, bump both together and drop this.
+    ignore:
+      - dependency-name: typescript
+        versions:
+          - '>= 7'
     groups:
       typescript:
         patterns:
