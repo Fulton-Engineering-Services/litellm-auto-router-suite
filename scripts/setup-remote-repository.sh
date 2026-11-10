@@ -198,7 +198,11 @@ preflight() {
         || die "token cannot see org '${ORG}' — check 'gh auth status' scopes (needs read:org, and admin:org for the ruleset)"
     log_success "org reachable: ${ORG}"
 
-    [ -d .git ] || die "not a git worktree: $REPO_ROOT"
+    # Not [ -d .git ]: a linked worktree created by `git worktree add` keeps its
+    # gitdir in a .git FILE, so the directory test rejected a perfectly good
+    # checkout. Ask git instead of guessing from the path.
+    [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] \
+        || die "not a git worktree: $REPO_ROOT"
 
     local branch
     branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -495,6 +499,28 @@ ruleset_id() {
         | jq -r --arg n "${NAME} Branch Protection" '[.[] | select(.name==$n)] | (.[0].id // "")'
 }
 
+# normalize_ruleset — reduce a ruleset document to just its writable definition.
+#
+# A GET carries server-provided fields (id, node_id, timestamps, links, source)
+# that are not part of what this script sends. Projecting the keys that ARE the
+# definition, rather than blacklisting whatever GitHub happens to add, keeps the
+# comparison below honest as the API evolves.
+normalize_ruleset() {
+    jq -S '{name, target, enforcement, conditions, rules,
+            bypass_actors: (.bypass_actors // [])}'
+}
+
+# ruleset_matches ID BODY — is the live ruleset already exactly what BODY says?
+#
+# This is what makes the step cheap and quiet on a re-run: without it the script
+# would issue a write every single time it ran.
+ruleset_matches() {
+    local id="$1" body="$2" live="$WORKDIR/ruleset-live.json" want="$WORKDIR/ruleset-want.json"
+    gh api "/orgs/${ORG}/rulesets/${id}" | normalize_ruleset > "$live" || return 1
+    normalize_ruleset < "$body" > "$want" || return 1
+    cmp -s "$live" "$want"
+}
+
 apply_ruleset() {
     log_header "Org ruleset"
     github_org_admin "$ORG"
@@ -509,28 +535,41 @@ apply_ruleset() {
     local existing_id
     existing_id="$(ruleset_id)"
 
-    if [ -n "$existing_id" ]; then
-        # Update by recreate. PATCH is not honored for these rulesets: it answers
-        # 404 ({"message":"Not Found"}, documentation_url .../rest) for
-        # /orgs/{org}/rulesets/{id} AND /repos/{repo}/rulesets/{id}, with the full
-        # definition and with a body of just {"name":...}, while GET on both those
-        # paths and POST on /orgs/{org}/rulesets all succeed for the same token
-        # (org membership role admin, admin:org scope). delete-then-create is the
-        # mutation the API does honor -- measured DELETE 204 then POST 201.
-        #
-        # The gap between the two calls is sub-second, and if the create fails the
-        # script says so explicitly instead of leaving the repo quietly unprotected:
-        # this step is idempotent, so re-running restores the definition.
-        log_step "ruleset exists (id ${existing_id}); recreating it (PATCH is 404 for org rulesets)"
-        confirm "recreate org ruleset '${NAME} Branch Protection}'"
-        write_api DELETE "/orgs/${ORG}/rulesets/${existing_id}" ""
-        if ! write_api POST "/orgs/${ORG}/rulesets" "$body"; then
-            die "ruleset ${existing_id} was deleted but the replacement was NOT created — ${NAME} currently has no branch protection. Re-run this script to restore it."
-        fi
+    local action
+    if [ -z "$existing_id" ]; then
+        action="create"
+    elif ruleset_matches "$existing_id" "$body"; then
+        action="noop"
     else
-        confirm "create org ruleset '${NAME} Branch Protection}'"
-        write_api POST "/orgs/${ORG}/rulesets" "$body"
+        action="update"
     fi
+
+    case "$action" in
+        noop)
+            log_success "ruleset '${NAME} Branch Protection}' (id ${existing_id}) already matches; no write"
+            ;;
+        update)
+            # Update in place. PUT is the verb these endpoints honor: measured 200
+            # on /orgs/{org}/rulesets/{id} with the full definition, the id was
+            # preserved and the re-read came back byte-identical to the body sent.
+            # PATCH 404s for these rulesets ({"message":"Not Found"} for the same
+            # token that GETs and POSTs them fine), which is what pushed an earlier
+            # revision of this step to delete-then-create -- the wrong cure. Between
+            # those two calls the repository has no branch protection at all, and
+            # since create has no conditional-write form, every idempotent re-run of
+            # this script churned the ruleset id (26910111 -> 26911541 -> 26911762)
+            # even when the definition had not changed.
+            log_step "ruleset exists (id ${existing_id}); updating it in place"
+            confirm "update org ruleset '${NAME} Branch Protection}'"
+            if ! write_api PUT "/orgs/${ORG}/rulesets/${existing_id}" "$body"; then
+                die "could not update ruleset ${existing_id} — ${NAME} is still running the previous definition. Re-run this script to retry. Unlike the old recreate path, a failure here cannot leave the repository unprotected."
+            fi
+            ;;
+        create)
+            confirm "create org ruleset '${NAME} Branch Protection}'"
+            write_api POST "/orgs/${ORG}/rulesets" "$body"
+            ;;
+    esac
     [ "$DRY_RUN" = true ] && return 0
 
     # Both rulesets together are the enforced reality; print them so the operator
