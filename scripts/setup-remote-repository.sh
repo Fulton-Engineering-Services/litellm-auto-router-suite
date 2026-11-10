@@ -510,8 +510,23 @@ apply_ruleset() {
     existing_id="$(ruleset_id)"
 
     if [ -n "$existing_id" ]; then
-        log_step "ruleset exists (id ${existing_id}); PATCH replaces its definition"
-        write_api PATCH "/orgs/${ORG}/rulesets/${existing_id}" "$body"
+        # Update by recreate. PATCH is not honored for these rulesets: it answers
+        # 404 ({"message":"Not Found"}, documentation_url .../rest) for
+        # /orgs/{org}/rulesets/{id} AND /repos/{repo}/rulesets/{id}, with the full
+        # definition and with a body of just {"name":...}, while GET on both those
+        # paths and POST on /orgs/{org}/rulesets all succeed for the same token
+        # (org membership role admin, admin:org scope). delete-then-create is the
+        # mutation the API does honor -- measured DELETE 204 then POST 201.
+        #
+        # The gap between the two calls is sub-second, and if the create fails the
+        # script says so explicitly instead of leaving the repo quietly unprotected:
+        # this step is idempotent, so re-running restores the definition.
+        log_step "ruleset exists (id ${existing_id}); recreating it (PATCH is 404 for org rulesets)"
+        confirm "recreate org ruleset '${NAME} Branch Protection}'"
+        write_api DELETE "/orgs/${ORG}/rulesets/${existing_id}" ""
+        if ! write_api POST "/orgs/${ORG}/rulesets" "$body"; then
+            die "ruleset ${existing_id} was deleted but the replacement was NOT created — ${NAME} currently has no branch protection. Re-run this script to restore it."
+        fi
     else
         confirm "create org ruleset '${NAME} Branch Protection}'"
         write_api POST "/orgs/${ORG}/rulesets" "$body"
