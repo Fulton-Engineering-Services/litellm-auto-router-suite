@@ -34,8 +34,12 @@ pnpm-debug.log
 
 # Build output
 dist/
-lib/
-lib-tests/
+# Anchored to typescript/ on purpose. A bare `lib/` matches a directory named lib
+# at ANY depth, which silently swallows scripts/lib/ -- the operators' library
+# every driver sources and that lefthook's pre-commit job depends on. tsc emits
+# lib/ and lib-tests/ as package output directories under the pnpm workspace.
+typescript/**/lib/
+typescript/**/lib-tests/
 out/
 coverage/
 
