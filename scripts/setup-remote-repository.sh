@@ -424,15 +424,19 @@ ruleset_body() {
                 { type: "deletion" },
                 { type: "creation" },
                 { type: "non_fast_forward" },
+                # Only the five parameters the org ruleset API accepts. An earlier
+                # draft also carried require_review_on_push, automatic_access_check
+                # and do_not_enforce_on_create here; the POST answered
+                # "Invalid rule pull_request: Unexpected parameter ..." for each --
+                # those three belong to branch protection, not to rulesets.
+                # do_not_enforce_on_create stays legal under required_status_checks
+                # below, which is why only this block loses it.
                 { type: "pull_request", parameters: {
                     required_approving_review_count: 1,
                     require_last_push_approval: true,
                     dismiss_stale_reviews_on_push: true,
                     require_code_owner_review: false,
-                    require_review_on_push: false,
-                    required_review_thread_resolution: false,
-                    automatic_access_check: true,
-                    do_not_enforce_on_create: false } },
+                    required_review_thread_resolution: false } },
                 { type: "required_status_checks", parameters: {
                     strict_required_status_checks_policy: true,
                     do_not_enforce_on_create: false,
