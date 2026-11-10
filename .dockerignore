@@ -1,0 +1,14 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/lib
+**/lib-tests
+**/dist
+**/coverage
+htmlcov
+.git
+.design
+bazel-*
+.pytest_cache
+.mypy_cache
+.ruff_cache
