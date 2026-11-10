@@ -144,10 +144,14 @@ write_api() {
         fi
         return 0
     fi
+    # Response JSON is swallowed here, not at the call sites. Three callers used to
+    # carry their own >/dev/null, which threw away the dry-run plan above as well:
+    # the create call and both ruleset mutations printed nothing, so an operator
+    # reviewing --dry-run could not see the calls that matter most.
     if [ -n "$body" ] && [ -f "$body" ]; then
-        gh_api "$method" "$path" --input "$body"
+        gh_api "$method" "$path" --input "$body" >/dev/null
     else
-        gh_api "$method" "$path"
+        gh_api "$method" "$path" >/dev/null
     fi
 }
 
@@ -254,7 +258,7 @@ create_repo() {
         }' > "$body"
 
     confirm "create public org repository ${REPO}"
-    write_api POST "/orgs/${ORG}/repos" "$body" >/dev/null
+    write_api POST "/orgs/${ORG}/repos" "$body"
     [ "$DRY_RUN" = true ] && return 0
 
     gh api "repos/${REPO}" -q .full_name >/dev/null 2>&1 \
@@ -300,8 +304,15 @@ push_repo() {
     log_header "Push"
     local url transport
     transport="$(pick_transport)"
-    url="$SSH_REMOTE"
-    [ "$transport" = https ] && url="$HTTPS_REMOTE"
+    # Validated rather than trusted. The probe runs inside $(...), so anything it
+    # logs lands in the variable: a contaminated value failed the equality test and
+    # left url on the SSH remote while reporting https transport -- a push over a
+    # transport this host has no key for, after the repo was already created.
+    case "$transport" in
+        ssh)   url="$SSH_REMOTE" ;;
+        https) url="$HTTPS_REMOTE" ;;
+        *)     die "transport probe returned '${transport}', expected ssh or https" ;;
+    esac
 
     local existing
     existing="$(git config --local --get remote.origin.url 2>/dev/null || true)"
@@ -347,7 +358,8 @@ pick_transport() {
             -T git@github.com 2>&1 | grep -qi 'successfully authenticated'; then
         printf 'ssh'
     else
-        log_warn "ssh to github.com is not authorized on this host; falling back to HTTPS + gh credential helper"
+        # >&2 because stdout is the return channel of this function.
+        log_warn "ssh to github.com is not authorized on this host; falling back to HTTPS + gh credential helper" >&2
         printf 'https'
     fi
 }
@@ -428,10 +440,10 @@ apply_ruleset() {
 
     if [ -n "$existing_id" ]; then
         log_step "ruleset exists (id ${existing_id}); PATCH replaces its definition"
-        write_api PATCH "/orgs/${ORG}/rulesets/${existing_id}" "$body" >/dev/null
+        write_api PATCH "/orgs/${ORG}/rulesets/${existing_id}" "$body"
     else
         confirm "create org ruleset '${NAME} Branch Protection}'"
-        write_api POST "/orgs/${ORG}/rulesets" "$body" >/dev/null
+        write_api POST "/orgs/${ORG}/rulesets" "$body"
     fi
     [ "$DRY_RUN" = true ] && return 0
 
