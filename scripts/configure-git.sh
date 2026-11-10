@@ -306,8 +306,18 @@ configure_git() {
     # time a fetch sees a remote tag of the same name. This repo re-points release
     # tags deliberately; no other repo is being opted in. Re-clones get it by
     # running this script, which is the operators' entry point anyway.
-    git config --local remote.origin.tagopt --force
-    log_success "Set remote.origin.tagopt to --force (local)"
+    #
+    # Guarded on origin actually having a url, because git config CREATES the
+    # [remote "origin"] section it writes into: a url-less stub is worse than no
+    # section at all, since `git remote get-url origin` then succeeds and prints
+    # the bare word "origin", which reads as a real remote to every downstream
+    # probe (it made setup-remote-repository.sh refuse its own first run).
+    if [ -n "$(git config --local --get remote.origin.url 2>/dev/null || printf '')" ]; then
+        git config --local remote.origin.tagopt --force
+        log_success "Set remote.origin.tagopt to --force (local)"
+    else
+        log_info "No origin url yet; skipping remote.origin.tagopt (re-run once the remote exists)"
+    fi
 
     configure_credential_helper
 }

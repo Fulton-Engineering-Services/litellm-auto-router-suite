@@ -198,8 +198,14 @@ preflight() {
     fi
     log_success "worktree clean on main ($(git rev-parse --short HEAD))"
 
+    # The configured url is the only honest existence probe. `git remote get-url
+    # origin` succeeds and prints the bare word "origin" for a [remote "origin"]
+    # section that has no url -- which is exactly what `git config
+    # remote.origin.tagopt --force` leaves behind in a clone whose remote has not
+    # been created yet -- and this preflight would then refuse its own first run.
     local existing
-    if existing="$(git remote get-url origin 2>/dev/null)"; then
+    existing="$(git config --local --get remote.origin.url 2>/dev/null || true)"
+    if [ -n "${existing}" ]; then
         case "$existing" in
             *":${ORG}/${NAME}.git"|*"${ORG}/${NAME}"*)
                 log_info "origin already points at the target: ${existing}" ;;
@@ -298,11 +304,19 @@ push_repo() {
     [ "$transport" = https ] && url="$HTTPS_REMOTE"
 
     local existing
-    if existing="$(git remote get-url origin 2>/dev/null)"; then
-        [ "$existing" = "$url" ] || {
+    existing="$(git config --local --get remote.origin.url 2>/dev/null || true)"
+    if [ -n "${existing}" ]; then
+        [ "${existing}" = "$url" ] || {
             log_step "repointing origin from ${existing} to ${url}"
             git remote set-url origin "$url"
         }
+    elif git config --local --get-regexp '^remote\.origin\.' >/dev/null 2>&1; then
+        # A url-less stub: the section exists (per-remote config written before the
+        # remote did), so `git remote add` would fail with "remote origin already
+        # exists" and set-url is the operation that actually fills it in.
+        confirm "set the url of the existing url-less origin to ${url} and push main"
+        log_step "origin exists without a url; setting it"
+        git remote set-url origin "$url"
     else
         confirm "add origin ${url} and push main"
         git remote add origin "$url"
