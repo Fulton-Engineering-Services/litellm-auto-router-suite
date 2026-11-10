@@ -231,6 +231,9 @@ create_repo() {
     fi
 
     local body="$WORKDIR/create.json"
+    # HOMEPAGE defaults to "" and the API rejects an empty homepage as an invalid
+    # URL -- it failed the whole create with HTTP 422 -- so the key is dropped
+    # rather than sent blank or null.
     jq -n \
         --arg name "$NAME" \
         --arg description "$DESCRIPTION" \
@@ -238,7 +241,6 @@ create_repo() {
         '{
             name: $name,
             description: $description,
-            homepage: $homepage,
             private: false,
             has_issues: true,
             has_projects: false,
@@ -255,7 +257,8 @@ create_repo() {
             squash_merge_commit_message: "COMMIT_MESSAGES",
             merge_commit_title: "MERGE_MESSAGE",
             merge_commit_message: "PR_BODY"
-        }' > "$body"
+        }
+        | if $homepage == "" then del(.homepage) else . end' > "$body"
 
     confirm "create public org repository ${REPO}"
     write_api POST "/orgs/${ORG}/repos" "$body"
