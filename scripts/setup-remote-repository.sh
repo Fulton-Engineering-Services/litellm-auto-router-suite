@@ -499,26 +499,54 @@ ruleset_id() {
         | jq -r --arg n "${NAME} Branch Protection" '[.[] | select(.name==$n)] | (.[0].id // "")'
 }
 
-# normalize_ruleset — reduce a ruleset document to just its writable definition.
+# ruleset_matches ID BODY — does the stored ruleset already satisfy BODY?
 #
-# A GET carries server-provided fields (id, node_id, timestamps, links, source)
-# that are not part of what this script sends. Projecting the keys that ARE the
-# definition, rather than blacklisting whatever GitHub happens to add, keeps the
-# comparison below honest as the API evolves.
-normalize_ruleset() {
-    jq -S '{name, target, enforcement, conditions, rules,
-            bypass_actors: (.bypass_actors // [])}'
-}
-
-# ruleset_matches ID BODY — is the live ruleset already exactly what BODY says?
+# Equality cannot answer this, and the first version of this check assumed it
+# could: GitHub stores defaults the generated body never mentions
+# (allowed_merge_methods, required_reviewers,
+# require_extra_approval_for_unattributed_changes ...), so a live ruleset is never
+# byte-equal to the document that produced it. Comparing normalized copies of both
+# therefore never matched, and the step wrote on every single run.
 #
-# This is what makes the step cheap and quiet on a re-run: without it the script
-# would issue a write every single time it ran.
+# Containment is the honest relation. Project the live document down to exactly the
+# keys BODY declares, then compare: everything this script asserts must be present
+# and equal, and whatever the server added on its own is not drift. Arrays match
+# positionally and must have equal length, so a rules list the server reordered
+# costs one redundant PUT -- the safe direction, because a false "already matches"
+# would be the dangerous failure.
 ruleset_matches() {
-    local id="$1" body="$2" live="$WORKDIR/ruleset-live.json" want="$WORKDIR/ruleset-want.json"
-    gh api "/orgs/${ORG}/rulesets/${id}" | normalize_ruleset > "$live" || return 1
-    normalize_ruleset < "$body" > "$want" || return 1
-    cmp -s "$live" "$want"
+    local id="$1" body="$2" raw="$WORKDIR/ruleset-live.json" rc=0
+    gh api "/orgs/${ORG}/rulesets/${id}" > "$raw" || return 1
+    jq -e --slurpfile spec "$body" '
+        def project:
+            {name, target, enforcement, conditions, rules,
+             bypass_actors: (.bypass_actors // [])};
+        def restrict($s):
+            if ($s | type) == "object" and (type == "object") then
+                # . inside reduce is the accumulator, not the document being read,
+                # so the input has to be bound before it can be indexed.
+                . as $in
+                | reduce ($s | keys_unsorted[]) as $k
+                      ({}; .[$k] = ($in | getpath([$k]) | restrict($s[$k])))
+            elif ($s | type) == "array" and (type == "array") then
+                if length != ($s | length) then
+                    [{"omp-length-mismatch": true}]
+                else
+                    [range(0; length) as $i | .[$i] | restrict($s[$i])]
+                end
+            else
+                .
+            end;
+        ($spec[0] | project) as $want
+        | (restrict($want) == $want)
+    ' "$raw" > /dev/null || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        # A broken predicate must not quietly degrade into "always write", which is
+        # precisely how the equality bug above hid for so long.
+        *) die "could not compare ruleset ${id} against the desired definition (jq exit ${rc}); refusing to guess whether a write is needed" ;;
+    esac
 }
 
 apply_ruleset() {
