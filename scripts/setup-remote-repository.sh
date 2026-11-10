@@ -314,6 +314,15 @@ push_repo() {
         *)     die "transport probe returned '${transport}', expected ssh or https" ;;
     esac
 
+    # Nothing below this point executes under --dry-run. `git remote add` and
+    # `git remote set-url` are real mutations of this checkout: they used to sit
+    # ahead of the dry-run bail-out, so a run that promised to report only left
+    # origin pointing at the SSH URL behind it.
+    if [ "$DRY_RUN" = true ]; then
+        log_step "[dry-run] would point origin at ${url} (${transport} transport) and push main"
+        return 0
+    fi
+
     local existing
     existing="$(git config --local --get remote.origin.url 2>/dev/null || true)"
     if [ -n "${existing}" ]; then
@@ -333,8 +342,6 @@ push_repo() {
         git remote add origin "$url"
     fi
     log_info "remote origin: ${url} (${transport} transport)"
-
-    [ "$DRY_RUN" = true ] && { log_step "[dry-run] git push -u origin main"; return 0; }
 
     git push -u origin main
     if [ -n "$(git tag --list)" ]; then
