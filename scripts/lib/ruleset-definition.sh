@@ -8,8 +8,7 @@
 #   dco_app_id                    DCO GitHub App id from the org installation
 #   ruleset_body OUT_FILE DCO_ID  write the desired ruleset document
 #   ruleset_id                    id of this repo's org ruleset, or empty string
-#   normalize_ruleset DOC REF     projection of DOC, judged against REF
-#   ruleset_matches ID WANT_FILE  0 when the live ruleset already says WANT_FILE
+#   ruleset_matches ID BODY       0 when the stored ruleset already satisfies BODY
 #
 # This module is the desired state; ruleset-apply.sh is the reconciliation. The
 # split is what lets a reviewer read the protection policy without also reading
@@ -125,65 +124,60 @@ ruleset_id() {
 # Comparison
 # ---------------------------------------------------------------------------
 
-# normalize_ruleset DOC REFERENCE — projection of DOC, judged against REFERENCE.
+# ruleset_matches ID BODY — does the stored ruleset already satisfy BODY?
 #
-# Both sides of ruleset_matches call this: the live document against the body, and
-# the body against itself. Passing every input as an argument rather than one as
-# stdin and one as a slurpfile is deliberate -- jq would then be handed the same
-# path twice with no way for a reader (or shellcheck) to tell which one it might
-# write.
+# Equality cannot answer this, and the first version of this check assumed it
+# could: GitHub stores defaults the generated body never mentions
+# (allowed_merge_methods, required_reviewers,
+# require_extra_approval_for_unattributed_changes ...), so a live ruleset is never
+# byte-equal to the document that produced it. Comparing normalized copies of both
+# therefore never matched, and the step wrote on every single run.
 #
-# A whole-document comparison can never report equality, which is the bug this
-# function exists to kill. GET /orgs/{org}/rulesets/{id} returns 2137 bytes for a
-# definition this script sends as 1934, and the whole difference is three keys
-# GitHub fills in for itself inside the pull_request rule:
-#   allowed_merge_methods: ["merge","squash","rebase"]
-#   require_extra_approval_for_unattributed_changes: true
-#   required_reviewers: []
-# Compare documents as they arrive and an already-correct ruleset still reads as
-# drift -- the apply step logged "updating it in place" on a ruleset that was
-# already exactly right, and issued a PUT to prove it.
+# Containment is the honest relation. Project the live document down to exactly the
+# keys BODY declares, then compare: everything this script asserts must be present
+# and equal, and whatever the server added on its own is not drift. Arrays match
+# positionally and must have equal length, so a rules list the server reordered
+# costs one redundant PUT -- the safe direction, because a false "already matches"
+# would be the dangerous failure.
 #
-# So the projection is derived FROM THE BODY WE INTEND TO SEND rather than from a
-# list of server fields to excuse. The body is the single source of truth for which
-# keys are significant, and a future server-injected default cannot resurrect the
-# bug because nothing here names server fields at all.
-normalize_ruleset() {
-    local doc="$1" reference="$2"
-    jq -S --slurpfile doc "$doc" --slurpfile want "$reference" '
-        # Keep only the parameters this rule type is defined to set. A key the body
-        # does not mention is GitHub-owned, so its value is not evidence of drift.
-        def keep_params($w):
-            .parameters as $live
-            | .parameters = ($w.parameters // {}
-                | with_entries(.value = ($live[.key] // null)));
-        # Rules are walked in body order and matched by type, so a rule the server
-        # dropped makes this array shorter than the body -- drift -- instead of
-        # vanishing the way a select-both-sides filter would hide it.
-        $doc[0]
-        | { name,
-            target,
-            enforcement,
-            conditions: (.conditions | {ref_name, repository_name}),
-            bypass_actors: (.bypass_actors // []),
-            rules: [ $want[0].rules[] as $w
-                     | (.rules[] | select(.type == $w.type)
-                        | keep_params($w)
-                        | {type, parameters}) ] }
-    '
-}
-
-# ruleset_matches ID BODY — is the live ruleset already exactly what BODY says?
+# Harness-verified against the live ruleset on seven cases: a server-default-only
+# difference matches, while a changed review count, a dropped required context, a
+# changed enforcement mode, dropped bypass actors, a live document missing a
+# declared value, and an extra live rule each force a write.
 #
-# This is what makes the ruleset step cheap and quiet on a re-run: without it the
-# script writes on every invocation. Both sides are reduced through
-# normalize_ruleset first, and both are left in $WORKDIR so KEEP_WORKDIR=1 can
-# answer "why did this decide to write?" after the fact.
+# The fetched document stays at $WORKDIR/ruleset-live.json, so KEEP_WORKDIR=1
+# leaves behind exactly what the predicate saw.
 ruleset_matches() {
-    local id="$1" body="$2"
-    local raw="$WORKDIR/ruleset-get.json" live="$WORKDIR/ruleset-live.json" want="$WORKDIR/ruleset-want.json"
+    local id="$1" body="$2" raw="$WORKDIR/ruleset-live.json" rc=0
     gh api "/orgs/${ORG}/rulesets/${id}" > "$raw" || return 1
-    normalize_ruleset "$raw" "$body" > "$live" || return 1
-    normalize_ruleset "$body" "$body" > "$want" || return 1
-    cmp -s "$live" "$want"
+    jq -e --slurpfile spec "$body" '
+        def project:
+            {name, target, enforcement, conditions, rules,
+             bypass_actors: (.bypass_actors // [])};
+        def restrict($s):
+            if ($s | type) == "object" and (type == "object") then
+                # . inside reduce is the accumulator, not the document being read,
+                # so the input has to be bound before it can be indexed.
+                . as $in
+                | reduce ($s | keys_unsorted[]) as $k
+                      ({}; .[$k] = ($in | getpath([$k]) | restrict($s[$k])))
+            elif ($s | type) == "array" and (type == "array") then
+                if length != ($s | length) then
+                    [{"omp-length-mismatch": true}]
+                else
+                    [range(0; length) as $i | .[$i] | restrict($s[$i])]
+                end
+            else
+                .
+            end;
+        ($spec[0] | project) as $want
+        | (restrict($want) == $want)
+    ' "$raw" > /dev/null || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        # A broken predicate must not quietly degrade into "always write", which is
+        # precisely how the equality bug above hid for so long.
+        *) die "could not compare ruleset ${id} against the desired definition (jq exit ${rc}); refusing to guess whether a write is needed" ;;
+    esac
 }

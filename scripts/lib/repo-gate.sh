@@ -46,10 +46,10 @@ cleanup() {
     # from a real failure.
     #
     # KEEP_WORKDIR=1 leaves the generated documents on disk (create.json,
-    # patch.json, ruleset.json, and the ruleset-live.json / ruleset-want.json pair
-    # the ruleset comparison writes) and prints where they are. Deleting them
-    # unconditionally made "why did the ruleset step decide to write?" unanswerable
-    # after the fact, so the only way to find out was to re-run the whole script.
+    # patch.json, ruleset.json, and the ruleset-live.json the containment predicate
+    # fetches) and prints where they are. Deleting them unconditionally made "why
+    # did the ruleset step decide to write?" unanswerable after the fact, so the
+    # only way to find out was to re-run the whole script.
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
         if [ -n "${KEEP_WORKDIR:-}" ]; then
             log_info "KEEP_WORKDIR set: generated files left in ${WORKDIR}"

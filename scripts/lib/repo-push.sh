@@ -60,14 +60,17 @@ preflight() {
 
     local branch
     branch="$(git rev-parse --abbrev-ref HEAD)"
-    # Publishing is a main-only operation, but --dry-run pushes nothing, so the
-    # refusal bought nothing there while making the script unrunnable from the one
-    # place this repo is actually worked: a `git worktree` on a feature branch,
-    # before the PR exists. A real publish still refuses any other HEAD.
-    if [ "$branch" != main ] && [ "$DRY_RUN" != true ]; then
-        die "HEAD is on '${branch}', expected 'main'"
+    # These are PUBLISH guards, and --dry-run publishes nothing: it mutates no
+    # remote, no branch and no remote url. Refusing outright there made the script
+    # unrunnable from the one place this repo is actually worked -- a `git worktree`
+    # on a feature branch, before the PR exists -- which is exactly when an
+    # operator wants the plan. So a dry run reports what a real run would refuse
+    # instead of being refused itself, and every real run still dies.
+    if [ "$branch" != main ]; then
+        [ "$DRY_RUN" = true ] \
+            || die "HEAD is on '${branch}', expected 'main'"
+        log_warn "--dry-run on '${branch}': a real publish requires main"
     fi
-    [ "$branch" = main ] || log_warn "--dry-run on '${branch}': a real publish requires main"
 
     # Tracked content compared by bytes, not by git's cached stat info. The
     # pre-commit formatter rewrites files it touches, and a rewrite whose bytes are
@@ -77,7 +80,11 @@ preflight() {
     # clean). What gets published is tracked content, so that is what is checked.
     if ! git diff --quiet HEAD --; then
         git status --short
-        die "tracked files differ from HEAD — commit or stash before publishing"
+        if [ "$DRY_RUN" = true ]; then
+            log_warn "tracked files differ from HEAD — a real publish would refuse this tree"
+        else
+            die "tracked files differ from HEAD — commit or stash before publishing"
+        fi
     fi
     local untracked
     untracked="$(git ls-files --others --exclude-standard)"
