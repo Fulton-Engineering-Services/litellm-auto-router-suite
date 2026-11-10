@@ -84,6 +84,7 @@ jobs:
     name: Build (${{ matrix.platform }})
     needs: [meta]
     permissions:
+      actions: write
       contents: read
       packages: write
     strategy:
