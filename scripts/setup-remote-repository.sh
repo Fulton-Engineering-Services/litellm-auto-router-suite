@@ -361,14 +361,21 @@ push_repo() {
 # is actually authorized; this host may authenticate gh over HTTPS only, in which
 # case configure-git.sh's gh credential helper carries the HTTPS push.
 pick_transport() {
-    if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
-            -T git@github.com 2>&1 | grep -qi 'successfully authenticated'; then
-        printf 'ssh'
-    else
-        # >&2 because stdout is the return channel of this function.
-        log_warn "ssh to github.com is not authorized on this host; falling back to HTTPS + gh credential helper" >&2
-        printf 'https'
-    fi
+    # Output is tested, not exit status. `ssh -T git@github.com` exits 1 even on
+    # success -- GitHub prints the authenticated banner and then fails the shell --
+    # so under `set -o pipefail` piping it into grep makes the pipeline status the
+    # ssh exit and the ssh branch unreachable for everyone, valid key or not.
+    local probe
+    probe="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
+        -T git@github.com 2>&1 || true)"
+    case "$probe" in
+        *[Ss]uccessfully\ authenticated*)
+            printf 'ssh' ;;
+        *)
+            # >&2 because stdout is the return channel of this function.
+            log_warn "ssh to github.com is not authorized on this host; falling back to HTTPS + gh credential helper" >&2
+            printf 'https' ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
