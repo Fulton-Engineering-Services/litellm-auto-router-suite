@@ -215,8 +215,30 @@ jobs:
       cancel-in-progress: true
     permissions:
       contents: read
+    # //:check execs uv (scripts/bazel/run-uv.sh: `cd python && exec uv run "$@"`),
+    # so the orchestrator needs the same toolchain as the job it orchestrates.
+    # UV_PYTHON pins the interpreter uv resolves, instead of letting uv pick an
+    # arbitrary managed CPython: the gate must run on an interpreter the Python job
+    # also covers, or "one command proves the whole shell" would be a claim about
+    # a configuration nobody tests.
+    env:
+      UV_PYTHON: '3.12'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # setup-uv and setup-python here, not only in the python job: Bazel was red
+      # on the runner (".../bin/check: 7: uv: not found", exit 127) while green on
+      # any macOS box that happens to have uv installed -- the dependency was
+      # satisfied by the developer machine, never by the workflow. Same pins as the
+      # python job so both gates resolve the identical toolchain.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-path: python/uv.lock
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
 
       # No `version:` — pnpm/action-setup reads `packageManager` from the
       # workspace manifest, so the pnpm version has exactly one source of truth
