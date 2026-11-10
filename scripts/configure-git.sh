@@ -16,32 +16,30 @@
 #   -v, --verbose         Show verbose output
 #   -h, --help            Show this help
 #
-# Identity resolution order (this repo never hardcodes a person's identity):
-#   1. -n / -e on the command line
-#   2. an existing `git config --global user.name` / `user.email`
-#   3. the authenticated gh account: gh api user -q .login and -q .id, giving
-#      <id>+<login>@users.noreply.github.com (GitHub's noreply form, so merged
-#      commits attribute to the account instead of leaking a private address)
-#   4. an interactive prompt - only at a controlling terminal
+# Identity is resolved in this order, and this repo never hardcodes a person's
+# identity: -n/-e, then an existing global git config, then the authenticated gh
+# account as <id>+<login>@users.noreply.github.com, then a prompt -- but only at
+# a controlling terminal.
 #
-# MERGE STRATEGIES:
-#   true  - rebase local commits on top of upstream when pulling (recommended)
-#   false - create a merge commit when pulling
+# credential.helper is chosen per origin host on macOS: an SSH remote clears the
+# chain, github.com uses gh, a GitLab host uses glab, anything else falls back to
+# osxkeychain. The DCO hooks add the Signed-off-by trailer and then validate it,
+# so it is never typed by hand. The full rules, and the reasons for them, are in
+# the modules listed below.
 #
-# CREDENTIAL HELPER (macOS, selected by the origin remote host):
-#   SSH remote (git@host: / ssh://)  "" (clears the helper chain; SSH keys auth)
-#   github.com                       gh CLI (osxkeychain if gh is missing)
-#   GitLab host                      glab CLI (osxkeychain if glab is missing)
-#   other HTTPS hosts                osxkeychain fallback
+# Layout - this file is the CLI: defaults, argument parsing, the summary report
+# and dispatch. The steps live in scripts/lib/, one responsibility per file:
 #
-# DCO HOOKS:
-#   prepare-commit-msg  Adds the Signed-off-by trailer to every commit unless one
-#                       is already present, using git config user.name/user.email.
-#   commit-msg          Rejects a Signed-off-by trailer whose address is not in
-#                       "Name <email>" form, which is how a hand-typed sign-off
-#                       loses its angle brackets and fails the DCO bot.
-#   DO NOT type "Signed-off-by:" by hand. The hook adds it. A repo where the
-#   trailer is typed manually is a repo where someone will type it wrong.
+#   lib/git-preflight.sh    repo check, merge-strategy check, identity resolution
+#   lib/git-settings.sh     the git configuration this repo asks for
+#   lib/git-credentials.sh  host-aware credential.helper selection
+#   lib/git-dco-hooks.sh    the two DCO hooks, written fresh on every run
+#   lib/common.sh           logging, die, require_command
+#
+# This repo holds bash to 250 lines per file -- tighter than the 500-line ceiling
+# used elsewhere, because bash here accumulates hard-won comments about tooling
+# quirks, and a 700-line wall stops being readable long before it stops being
+# correct.
 #
 # Compatible with: bash 3.2 + BSD coreutils (macOS stock /bin/bash)
 set -euo pipefail
@@ -50,6 +48,19 @@ LIB_DIR="$SCRIPT_DIR/lib"
 [ -f "$LIB_DIR/common.sh" ] || { echo "FATAL: missing $LIB_DIR/common.sh" >&2; exit 1; }
 # shellcheck source=lib/common.sh disable=SC1091
 . "$LIB_DIR/common.sh"
+
+for _lib in git-preflight git-credentials git-settings git-dco-hooks; do
+    [ -f "$LIB_DIR/${_lib}.sh" ] || { echo "FATAL: missing $LIB_DIR/${_lib}.sh" >&2; exit 1; }
+done
+unset _lib
+# shellcheck source=lib/git-preflight.sh disable=SC1091
+. "$LIB_DIR/git-preflight.sh"
+# shellcheck source=lib/git-credentials.sh disable=SC1091
+. "$LIB_DIR/git-credentials.sh"
+# shellcheck source=lib/git-settings.sh disable=SC1091
+. "$LIB_DIR/git-settings.sh"
+# shellcheck source=lib/git-dco-hooks.sh disable=SC1091
+. "$LIB_DIR/git-dco-hooks.sh"
 
 # ---------------------------------------------------------------------------
 # Defaults (env-overridable)
@@ -96,7 +107,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Presentation
 # ---------------------------------------------------------------------------
 
 # The summary report keeps this script's original echo -e style; decisions and
@@ -105,287 +116,6 @@ note() {
     if [ "${VERBOSE}" = "1" ]; then
         echo -e "${BLUE}[INFO]${NC} $1"
     fi
-}
-
-check_git_repo() {
-    if ! git rev-parse --git-dir >/dev/null 2>&1; then
-        log_error "Not in a git repository. Run this script from inside the cloned repository."
-        exit 1
-    fi
-    note "Confirmed: running in a git repository ($(git rev-parse --show-toplevel 2>/dev/null))"
-}
-
-validate_merge_strategy() {
-    local strategy="$1"
-    case "${strategy}" in
-        true|false) return 0 ;;
-        *)
-            log_error "Invalid merge strategy: ${strategy}"
-            log_error "Valid options: true, false"
-            exit 1
-            ;;
-    esac
-}
-
-# resolve_identity
-#   Fills NAME and EMAIL using the documented order. Prompts only when there is
-#   a controlling terminal; a non-interactive run with no identity fails with the
-#   exact flags to pass instead of hanging on a read.
-resolve_identity() {
-    if [ -z "${NAME}" ]; then
-        NAME="$(git config --global user.name 2>/dev/null)" || true
-    fi
-    if [ -z "${EMAIL}" ]; then
-        EMAIL="$(git config --global user.email 2>/dev/null)" || true
-    fi
-    if [ -n "${NAME}" ] && [ -n "${EMAIL}" ]; then
-        note "Identity taken from existing global git config."
-        return 0
-    fi
-
-    if [ -z "${NAME}" ] || [ -z "${EMAIL}" ]; then
-        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-            local login="" uid=""
-            login="$(gh api user -q .login 2>/dev/null)" || true
-            uid="$(gh api user -q .id 2>/dev/null)" || true
-            if [ -n "${login}" ] && [ -n "${uid}" ]; then
-                [ -n "${NAME}" ] || NAME="${login}"
-                # GitHub's noreply form keeps attribution without publishing a
-                # personal address in every commit.
-                [ -n "${EMAIL}" ] || EMAIL="${uid}+${login}@users.noreply.github.com"
-                note "Identity derived from the authenticated gh account (${login})."
-            fi
-        else
-            note "gh is unavailable or unauthenticated; cannot derive a GitHub noreply identity."
-        fi
-    fi
-
-    if [ -z "${NAME}" ] || [ -z "${EMAIL}" ]; then
-        if [ ! -t 0 ]; then
-            log_error "No git identity available and no controlling terminal to ask for one."
-            printf '       Pass it explicitly: scripts/configure-git.sh -n "Full Name" -e "name@example.com"\n' >&2
-            exit 1
-        fi
-        while [ -z "${NAME}" ]; do
-            printf 'Git user.name (e.g. "Jane Doe"): ' >&2
-            read -r NAME
-        done
-        while [ -z "${EMAIL}" ]; do
-            printf 'Git user.email (name@example.com, or the GitHub noreply form): ' >&2
-            read -r EMAIL
-        done
-    fi
-
-    case "${EMAIL}" in
-        *@*.*) return 0 ;;
-        *)
-            log_error "Refusing to set an unusable user.email: '${EMAIL}'"
-            exit 1
-            ;;
-    esac
-}
-
-# configure_credential_helper
-#   Host-aware credential.helper selection. Idempotent: every branch clears the
-#   existing chain first, so re-running converges instead of stacking helpers.
-configure_credential_helper() {
-    case "$(uname -s)" in
-        Darwin) ;;
-        *)
-            note "credential.helper selection is macOS-specific; leaving git's default on $(uname -s)."
-            return 0
-            ;;
-    esac
-
-    local remote_url="" transport="" remote_host=""
-    remote_url="$(git config --get remote.origin.url 2>/dev/null)" || true
-
-    case "${remote_url}" in
-        git@*:*|ssh://*)  transport="ssh" ;;
-        http://*|https://*) transport="https" ;;
-        *)                transport="" ;;
-    esac
-
-    if [ "${transport}" = "ssh" ]; then
-        # SSH keys authenticate; an empty helper value clears any inherited chain.
-        git config --unset-all credential.helper 2>/dev/null || true
-        git config --add credential.helper ""
-        log_success "SSH remote - credential helper cleared"
-        return 0
-    fi
-
-    if [ "${transport}" = "https" ]; then
-        local host="${remote_url#*://}"
-        host="${host#*@}"
-        remote_host="${host%%/*}"
-    fi
-
-    git config --unset-all credential.helper 2>/dev/null || true
-
-    case "${remote_host}" in
-        *github.com*)
-            if command -v gh >/dev/null 2>&1; then
-                # Empty value first clears inherited helpers, then gh takes over.
-                git config --add credential.helper ""
-                git config --add credential.helper "$(command -v gh) auth git-credential"
-                log_success "Set credential helper to gh (multi-account support)"
-            else
-                git config credential.helper osxkeychain
-                log_warn "gh CLI not found, using osxkeychain (may have multi-account issues)"
-            fi
-            ;;
-        *gitlab*)
-            if command -v glab >/dev/null 2>&1; then
-                git config --add credential.helper ""
-                git config --add credential.helper "$(command -v glab) auth git-credential"
-                log_success "Set credential helper to glab (GitLab remote)"
-            else
-                git config credential.helper osxkeychain
-                log_warn "glab CLI not found, using osxkeychain (may have multi-account issues)"
-            fi
-            ;;
-        "")
-            git config credential.helper osxkeychain
-            log_warn "Could not determine a remote host, using osxkeychain (may have multi-account issues)"
-            ;;
-        *)
-            git config credential.helper osxkeychain
-            log_warn "Unknown HTTPS host '${remote_host}', using osxkeychain (may have multi-account issues)"
-            ;;
-    esac
-}
-
-configure_git() {
-    local name="$1"
-    local email="$2"
-    local merge_strategy="$3"
-
-    log_step "Configuring git settings..."
-
-    if git config user.name "${name}"; then
-        log_success "Set user.name to: ${name}"
-    else
-        log_error "Failed to set user.name"
-        exit 1
-    fi
-
-    if git config user.email "${email}"; then
-        log_success "Set user.email to: ${email}"
-    else
-        log_error "Failed to set user.email"
-        exit 1
-    fi
-
-    if git config pull.rebase "${merge_strategy}"; then
-        log_success "Set pull.rebase to: ${merge_strategy}"
-    else
-        log_error "Failed to set pull.rebase"
-        exit 1
-    fi
-
-    log_step "Setting additional git configurations..."
-
-    # Default branch name for any repo created from here on.
-    git config init.defaultBranch main 2>/dev/null || true
-    note "Set init.defaultBranch to main"
-
-    git config color.ui auto
-    log_success "Enabled color output"
-
-    git config push.default simple
-    log_success "Set push.default to simple"
-
-    # Create the upstream on first push instead of erroring out.
-    git config push.autoSetupRemote true
-    log_success "Set push.autoSetupRemote true"
-
-    # Repo-local, unlike the neighbouring push.* settings which are deliberately
-    # global. remote.origin.tagopt is keyed on the remote NAME, so a --global copy
-    # would disable tag-update protection for every repository on the workstation
-    # that happens to have an origin -- silently overwriting a local tag the first
-    # time a fetch sees a remote tag of the same name. This repo re-points release
-    # tags deliberately; no other repo is being opted in. Re-clones get it by
-    # running this script, which is the operators' entry point anyway.
-    #
-    # Guarded on origin actually having a url, because git config CREATES the
-    # [remote "origin"] section it writes into: a url-less stub is worse than no
-    # section at all, since `git remote get-url origin` then succeeds and prints
-    # the bare word "origin", which reads as a real remote to every downstream
-    # probe (it made setup-remote-repository.sh refuse its own first run).
-    if [ -n "$(git config --local --get remote.origin.url 2>/dev/null || printf '')" ]; then
-        git config --local remote.origin.tagopt --force
-        log_success "Set remote.origin.tagopt to --force (local)"
-    else
-        log_info "No origin url yet; skipping remote.origin.tagopt (re-run once the remote exists)"
-    fi
-
-    configure_credential_helper
-}
-
-# install_dco_hook
-#   Installs the two DCO hooks described in the header. Both are /bin/sh and are
-#   written from scratch each run, so a drifted copy is always repaired.
-install_dco_hook() {
-    local hooks_dir=""
-    hooks_dir="$(git rev-parse --git-path hooks)"
-    mkdir -p "${hooks_dir}"
-
-    # --- prepare-commit-msg: sign-off injection ---
-    local prepare_hook="${hooks_dir}/prepare-commit-msg"
-    cat > "${prepare_hook}" <<'HOOK_EOF'
-#!/bin/sh
-# Installed by scripts/configure-git.sh (litellm-auto-router-suite).
-# Auto-adds a Signed-off-by trailer for DCO compliance.
-# Idempotent: skips when a Signed-off-by trailer is already present.
-COMMIT_MSG_FILE="$1"
-COMMIT_SOURCE="$2"
-
-# Skip merge / squash sources; an amended message is already signed.
-case "$COMMIT_SOURCE" in
-  merge|squash) exit 0 ;;
-esac
-
-if grep -qiE '^Signed-off-by:' "$COMMIT_MSG_FILE"; then
-  exit 0
-fi
-
-NAME="$(git config user.name)"
-EMAIL="$(git config user.email)"
-if [ -z "$NAME" ] || [ -z "$EMAIL" ]; then
-  exit 0
-fi
-
-git interpret-trailers --in-place \
-  --trailer "Signed-off-by: $NAME <$EMAIL>" \
-  "$COMMIT_MSG_FILE"
-HOOK_EOF
-    chmod +x "${prepare_hook}"
-    log_success "Installed DCO prepare-commit-msg hook at: ${prepare_hook}"
-
-    # --- commit-msg: sign-off validation ---
-    local msg_hook="${hooks_dir}/commit-msg"
-    cat > "${msg_hook}" <<'HOOK_EOF'
-#!/bin/sh
-# Installed by scripts/configure-git.sh (litellm-auto-router-suite).
-# Validates every Signed-off-by trailer uses the correct form:
-#   Signed-off-by: Full Name <email@domain>
-# Catches manually typed sign-offs that lost their angle brackets.
-COMMIT_MSG_FILE="$1"
-
-BAD=$(grep -iE '^Signed-off-by:' "$COMMIT_MSG_FILE" \
-  | grep -vE '^Signed-off-by: .+ <[^>]+@[^>]+>$')
-
-if [ -n "$BAD" ]; then
-  echo "ERROR: Malformed Signed-off-by trailer (missing <email> angle brackets):" >&2
-  echo "$BAD" >&2
-  echo "" >&2
-  echo "Expected format: Signed-off-by: Full Name <email@domain>" >&2
-  echo "Tip: the prepare-commit-msg hook adds this trailer - never type it by hand." >&2
-  exit 1
-fi
-HOOK_EOF
-    chmod +x "${msg_hook}"
-    log_success "Installed DCO commit-msg validation hook at: ${msg_hook}"
 }
 
 show_config() {
