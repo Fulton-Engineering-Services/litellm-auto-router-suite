@@ -1,0 +1,19 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+exports_files(
+    [
+        "scripts/bazel/check-all.sh",
+        "scripts/bazel/run-pnpm.sh",
+        "scripts/bazel/run-uv.sh",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(name = "docs", srcs = glob(["*.md"], allow_empty = True))
+
+sh_binary(
+    name = "check",
+    srcs = ["scripts/bazel/check-all.sh"],
+    data = ["//typescript", "//python"],
+    tags = ["manual"],
+)

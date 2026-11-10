@@ -1,0 +1,45 @@
+# Thin orchestrator: every target shells out to the real pnpm workspace gate.
+# rules_js is deliberately absent — pnpm-lock.yaml is the dependency truth.
+
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "*.json",
+            "*.yaml",
+            "*.yml",
+            "*.mjs",
+            "*.ts",
+            "packages/**/*.ts",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# Namesake target so //:check can depend on this package as `//typescript`.
+filegroup(
+    name = "typescript",
+    srcs = [":srcs"],
+    visibility = ["//visibility:public"],
+)
+
+[
+    sh_binary(
+        name = n,
+        srcs = ["//:scripts/bazel/run-pnpm.sh"],
+        args = [t],
+        data = [":srcs"],
+        tags = ["manual"],
+    )
+    for (n, t) in {
+        "typecheck": "typecheck",
+        "lint": "lint",
+        "lint_tsdoc": "lint:tsdoc",
+        "test": "test",
+        "test_coverage": "test:coverage",
+        "build": "build",
+        "format_check": "format:check",
+    }.items()
+]

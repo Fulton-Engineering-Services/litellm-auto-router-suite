@@ -1,0 +1,11 @@
+common --enable_bzlmod
+build --incompatible_strict_action_env
+build --color=yes
+# Delegate targets exec the real toolchain, so they must never be sandboxed away from it.
+# (--spawn_strategy=local is Bazel 9's surviving form of the removed --local alias.)
+build --strategy=TestRunner=local
+build --spawn_strategy=local
+test --test_output=errors
+test --test_verbose_timeout_warnings
+coverage --combined_report=lcov
+coverage --instrumentation_filter=^//

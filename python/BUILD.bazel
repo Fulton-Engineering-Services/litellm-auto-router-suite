@@ -1,0 +1,40 @@
+# Thin orchestrator: every target shells out to the real uv workspace gate.
+# rules_python is deliberately absent — uv.lock is the dependency truth.
+
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "*.toml",
+            "*.lock",
+            "*.cfg",
+            ".python-version",
+            "packages/**/*.py",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# Namesake target so //:check can depend on this package as `//python`.
+filegroup(
+    name = "python",
+    srcs = [":srcs"],
+    visibility = ["//visibility:public"],
+)
+
+[
+    sh_binary(
+        name = n,
+        srcs = ["//:scripts/bazel/run-uv.sh"],
+        args = a,
+        data = [":srcs"],
+        tags = ["manual"],
+    )
+    for (n, a) in {
+        "ruff": ["ruff", "check", "."],
+        "mypy": ["mypy", "packages"],
+        "test": ["pytest"],
+    }.items()
+]

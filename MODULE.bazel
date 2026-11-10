@@ -1,0 +1,5 @@
+module(name = "litellm_auto_router_suite", version = "0.1.0")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+# Bazel 9 removed the native sh_binary; rules_shell is its official successor.
+bazel_dep(name = "rules_shell", version = "0.8.0")

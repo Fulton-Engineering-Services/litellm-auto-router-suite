@@ -1,0 +1,10 @@
+# Dependency and virtualenv trees must never be walked for BUILD files or matched
+# by filegroup globs. typescript/ and python/ are deliberately NOT ignored here:
+# they carry the //typescript and //python Bazel packages this repo's gates live in.
+node_modules
+typescript/node_modules
+typescript/coverage
+python/.venv
+python/htmlcov
+docs
+dist
