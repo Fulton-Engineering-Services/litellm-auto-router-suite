@@ -446,8 +446,18 @@ ruleset_body() {
                         { context: "Docker (linux/arm64)", integration_id: $actions },
                         { context: "DCO",                  integration_id: $dco } ] } }
             ],
+            # "OrganizationAdminTeam" is not a ruleset actor type -- the API answered
+            # "OrganizationAdminTeam is not a valid actor type (Validation Failed)".
+            # Rulesets accept RepositoryRole / Team / Integration / DeployKey; the
+            # org itself (Main Branch Protection, id 12798225) bypasses as
+            # {actor_type: "RepositoryRole", actor_id: 5, bypass_mode: "always"},
+            # which is the Admin role, so this repo follows the same convention and
+            # an operator can still hotfix instead of being locked out by their own
+            # required checks.
+            # No apostrophes in these comments: they live inside a single-quoted jq
+            # program, where one closes the shell string.
             bypass_actors: [
-                { actor_type: "OrganizationAdminTeam", actor_id: 1, bypass_mode: "always" } ]
+                { actor_type: "RepositoryRole", actor_id: 5, bypass_mode: "always" } ]
         }' > "$out"
 }
 
