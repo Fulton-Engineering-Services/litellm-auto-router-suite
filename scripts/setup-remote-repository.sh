@@ -112,7 +112,15 @@ HTTPS_REMOTE="https://github.com/${ORG}/${NAME}.git"
 # ---------------------------------------------------------------------------
 
 cleanup() {
-    [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ] && rm -rf "$WORKDIR"
+    # The last command of an EXIT trap becomes the script's exit status, so this
+    # has to end in success. WORKDIR is only assigned on the provisioning path, so
+    # under --verify the bare && chain that used to be here evaluated to false, and
+    # a fully green verify -- every assertion PASS -- exited 1, indistinguishable
+    # from a real failure.
+    if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+        rm -rf "$WORKDIR"
+    fi
+    return 0
 }
 trap cleanup EXIT
 
@@ -465,6 +473,17 @@ ruleset_body() {
         }' > "$out"
 }
 
+# ruleset_id — id of this repository's org ruleset, or the empty string.
+#
+# GET /orgs/{org}/rulesets is a SUMMARY view: name, id, enforcement and target are
+# populated but conditions and rules both come back null. Anything that needs
+# rules or conditions must GET the single ruleset by id -- which is why every
+# caller here resolves an id first and then GETs it.
+ruleset_id() {
+    gh api "/orgs/${ORG}/rulesets" \
+        | jq -r --arg n "${NAME} Branch Protection" '[.[] | select(.name==$n)] | (.[0].id // "")'
+}
+
 apply_ruleset() {
     log_header "Org ruleset"
     github_org_admin "$ORG"
@@ -477,8 +496,7 @@ apply_ruleset() {
     ruleset_body "$body" "$dco_id"
 
     local existing_id
-    existing_id="$(gh api "/orgs/${ORG}/rulesets" \
-        | jq -r --arg n "${NAME} Branch Protection" '.[] | select(.name==$n) | .id' 2>/dev/null | head -1)"
+    existing_id="$(ruleset_id)"
 
     if [ -n "$existing_id" ]; then
         log_step "ruleset exists (id ${existing_id}); PATCH replaces its definition"
@@ -490,11 +508,26 @@ apply_ruleset() {
     [ "$DRY_RUN" = true ] && return 0
 
     # Both rulesets together are the enforced reality; print them so the operator
-    # is not misled into thinking this one file is the whole picture.
-    log_step "org rulesets now matching this repository"
-    gh api "/orgs/${ORG}/rulesets" \
-        | jq -r --arg r "$NAME" '.[] | select((.conditions.repository_name.include // []) | (. == ["~ALL"] or (index($r) != null))) | "  \(.name) (id \(.id), \(.enforcement))"'
-    log_success "ruleset applied"
+    # is not misled into thinking this one file is the whole picture. Each ruleset
+    # is read back with its own GET: the list view returns conditions as null, so
+    # filtering the list by scope silently matched nothing -- the first run of this
+    # step printed zero rows and still reported success.
+    log_step "org rulesets now enforcing this repository"
+    local rs_id line matched=0
+    while IFS= read -r rs_id; do
+        [ -n "$rs_id" ] || continue
+        line="$(gh api "/orgs/${ORG}/rulesets/${rs_id}" \
+            | jq -r --arg r "$NAME" 'select((.conditions.repository_name.include // [])
+                    | (. == ["~ALL"] or index($r) != null))
+                    | "  \(.name) (id \(.id), \(.enforcement))"')"
+        [ -n "$line" ] || continue
+        printf '%s\n' "$line"
+        matched=$((matched + 1))
+    done < <(gh api "/orgs/${ORG}/rulesets" | jq -r '.[].id')
+    if [ "$matched" -eq 0 ]; then
+        log_warn "no org ruleset is scoped to ${NAME} or to ~ALL"
+    fi
+    log_success "ruleset applied (${matched} ruleset(s) in force)"
 }
 
 # ---------------------------------------------------------------------------
@@ -532,20 +565,23 @@ verify() {
         fi
     done
 
-    actual="$(gh api "/repos/${REPO}/rulesets" \
-        | jq -r --arg n "${NAME} Branch Protection" '[.[] | select(.name==$n)] | length')"
-    if [ "$actual" = "1" ]; then
-        assert_that true "ruleset present" "${NAME} Branch Protection"
-    else
-        assert_that false "ruleset present" "found ${actual} rulesets with that name"
+    # One lookup path, and every rule read from the single-ruleset GET. The list
+    # view returns rules as null, so the previous filter crashed with
+    # "Cannot iterate over: null" one line after reporting the ruleset present --
+    # a green presence check next to a crashed content check is worse than a plain
+    # failure, because it reads as protection that is not being asserted.
+    local rs_id
+    rs_id="$(ruleset_id)"
+    if [ -z "$rs_id" ]; then
+        assert_that false "ruleset present" "no ruleset named ${NAME} Branch Protection"
+        return 1
     fi
+    assert_that true "ruleset present" "${NAME} Branch Protection (id ${rs_id})"
 
     local contexts
-    contexts="$(gh api "/repos/${REPO}/rulesets" \
-        | jq -r --arg n "${NAME} Branch Protection" '
-            [.[] | select(.name==$n) | .rules[]
-             | select(.type=="required_status_checks")
-             | .parameters.required_status_checks[].context] | sort | join(",")')"
+    contexts="$(gh api "/orgs/${ORG}/rulesets/${rs_id}" \
+        | jq -r '[.rules[] | select(.type=="required_status_checks")
+                  | .parameters.required_status_checks[].context] | sort | join(",")')"
     local expected
     expected="$(printf '%s\n' "Bazel" "DCO" "Docker (linux/amd64)" "Docker (linux/arm64)" \
         "Python (3.12)" "Python (3.13)" "Shell" "TypeScript" | sort | paste -sd, -)"
@@ -553,6 +589,24 @@ verify() {
         assert_that true "required status checks" "8 contexts"
     else
         assert_that false "required status checks" "expected ${expected}, got ${contexts:-<none>}"
+    fi
+
+    # Review policy and the strict-status flag are asserted, not assumed: a ruleset
+    # that exists but approves on zero reviews, or tolerates a check that never
+    # reports, is not the protection this script claims to install.
+    local policy
+    policy="$(gh api "/orgs/${ORG}/rulesets/${rs_id}" \
+        | jq -r '[
+            (.rules[] | select(.type=="pull_request")
+              | [(.parameters.required_approving_review_count | tostring),
+                 (.parameters.require_last_push_approval | tostring)] | join(":")),
+            (.rules[] | select(.type=="required_status_checks")
+              | (.parameters.strict_required_status_checks_policy | tostring))
+          ] | join(" ")')"
+    if [ "$policy" = "1:true true" ]; then
+        assert_that true "review policy" "1 approval, last-push approval, strict status checks"
+    else
+        assert_that false "review policy" "expected 1:true true, got ${policy:-<none>}"
     fi
 
     local dco_id
