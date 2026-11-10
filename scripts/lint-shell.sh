@@ -16,6 +16,15 @@
 #   carries the house disable list, so this script must run from the repo root
 #   (it cds there itself).
 #
+# Length gate:
+#   Every file checked is also required to be <= MAX_SHELL_LINES lines
+#   (default 250, override with LINT_SHELL_MAX_LINES). Bash here accumulates
+#   hard-won comments about API and tooling quirks, so the ceiling is
+#   deliberately tighter than the ~500-line guidance this repo's other languages
+#   use. It is enforced here rather than left to review because a 700-line script
+#   passes shellcheck perfectly -- it is merely unreadable, and unreadable bash is
+#   how a quirk comment gets lost.
+#
 # Gate semantics:
 #   A missing shellcheck is a FAILURE, never a skip. A green run that checked
 #   nothing is worse than a red one, so an empty file set also fails.
@@ -36,6 +45,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 
 VERBOSE="${LINT_SHELL_VERBOSE:-0}"
 SHOW_VERSION="${LINT_SHELL_VERSION:-0}"
+# Per-file line ceiling for the length gate below.
+MAX_SHELL_LINES="${LINT_SHELL_MAX_LINES:-250}"
 # Directories scanned for shell sources, relative to the repo root.
 SCAN_DIRS="${LINT_SHELL_DIRS:-scripts docker}"
 POSITIONAL_SEEN=false
@@ -92,6 +103,24 @@ done
 
 file_count="$(find "${TARGETS[@]}" -type f -name '*.sh' | wc -l | tr -d ' ')"
 [ "${file_count}" -gt 0 ] || die "no *.sh files found under: ${TARGETS[*]} (a gate that checks nothing is not a gate)"
+
+# Checked before shellcheck, and with its own exit status: a file that is too
+# long is a structural complaint with a known remedy (decompose), and the
+# operator should read that before wading into analyzer findings about the same
+# file. Offenders are all reported before exiting, so one pass fixes them all.
+length_status=0
+while IFS= read -r -d '' shell_file; do
+    file_lines="$(wc -l < "${shell_file}" | tr -d ' ')"
+    if [ "${file_lines}" -gt "${MAX_SHELL_LINES}" ]; then
+        log_error "${shell_file}: ${file_lines} lines (limit ${MAX_SHELL_LINES})"
+        length_status=1
+    fi
+# Process substitution, not a pipe: a pipeline would run the loop in a subshell
+# and length_status would be lost on the way out, silently un-failing this gate.
+done < <(find "${TARGETS[@]}" -type f -name '*.sh' -print0)
+if [ "${length_status}" -ne 0 ]; then
+    die "shell file(s) exceed ${MAX_SHELL_LINES} lines - split them into scripts/lib/, one responsibility per file"
+fi
 
 SC_ARGS=(-x)
 if [ "${VERBOSE}" = "1" ]; then
