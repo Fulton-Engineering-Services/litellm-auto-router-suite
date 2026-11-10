@@ -28,6 +28,7 @@ permissions:
   contents: read
   attestations: write
   id-token: write
+  packages: write
 
 concurrency:
   group: docker-release-${{ github.ref }}
