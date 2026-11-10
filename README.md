@@ -8,13 +8,13 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Directory map
 
-|Path|Concern|
-|---|---|
-|`docker/`|`docker-bake.hcl` plus per-image build contexts; two cache planes (GHA + GHCR)|
-|`python/`|uv workspace: LiteLLM plugins and headroom service clients (ruff, mypy, pytest)|
-|`scripts/`|Operators' surface. Bash 3.2 / BSD-coreutils clean; helpers in `scripts/lib/`, Bazel wrappers in `scripts/bazel/`|
-|`typescript/`|pnpm workspace: routers and control planes (tsc, oxlint, eslint TSDoc, vitest)|
-|root|License and community docs, Prettier config, lefthook, shellcheck config, Bazel workspace files|
+| Path          | Concern                                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `docker/`     | `docker-bake.hcl` plus per-image build contexts; two cache planes (GHA + GHCR)                                    |
+| `python/`     | uv workspace: LiteLLM plugins and headroom service clients (ruff, mypy, pytest)                                   |
+| `scripts/`    | Operators' surface. Bash 3.2 / BSD-coreutils clean; helpers in `scripts/lib/`, Bazel wrappers in `scripts/bazel/` |
+| `typescript/` | pnpm workspace: routers and control planes (tsc, oxlint, eslint TSDoc, vitest)                                    |
+| root          | License and community docs, Prettier config, lefthook, shellcheck config, Bazel workspace files                   |
 
 ## Prerequisites
 
@@ -37,18 +37,18 @@ anything; it exits non-zero when something is absent, so it works as a CI probe.
 
 Every row is a required status check on `main`.
 
-|Gate|Command|
-|---|---|
-|Type-check|`pnpm --dir typescript run typecheck`|
-|Lint|`pnpm --dir typescript run lint`|
-|TSDoc|`pnpm --dir typescript run lint:tsdoc`|
-|Test|`pnpm --dir typescript run test`|
-|Build|`pnpm --dir typescript run build`|
-|Python lint|`uv run --directory python ruff check .`|
-|Python types|`uv run --directory python mypy packages`|
-|Python test|`uv run --directory python pytest`|
-|Shell|`scripts/lint-shell.sh`|
-|Containers|`docker buildx bake -f docker/docker-bake.hcl`|
+| Gate         | Command                                        |
+| ------------ | ---------------------------------------------- |
+| Type-check   | `pnpm --dir typescript run typecheck`          |
+| Lint         | `pnpm --dir typescript run lint`               |
+| TSDoc        | `pnpm --dir typescript run lint:tsdoc`         |
+| Test         | `pnpm --dir typescript run test`               |
+| Build        | `pnpm --dir typescript run build`              |
+| Python lint  | `uv run --directory python ruff check .`       |
+| Python types | `uv run --directory python mypy packages`      |
+| Python test  | `uv run --directory python pytest`             |
+| Shell        | `scripts/lint-shell.sh`                        |
+| Containers   | `docker buildx bake -f docker/docker-bake.hcl` |
 
 ## Bazel
 
@@ -79,9 +79,9 @@ ruleset. Enforced:
 Three settings have no API and are left to the operator; the script prints the deep links
 at the end:
 
-- Settings → General → Issues → *Auto-close issues with merged linked pull requests*
-- Settings → General → Commits → *Allow comments on individual commits* (should stay on)
-- Settings → General → Features → *Preserve this repository*
+- Settings → General → Issues → _Auto-close issues with merged linked pull requests_
+- Settings → General → Commits → _Allow comments on individual commits_ (should stay on)
+- Settings → General → Features → _Preserve this repository_
 
 ## Contributing
 

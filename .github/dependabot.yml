@@ -1,0 +1,48 @@
+version: 2
+
+# One grouped PR per ecosystem, weekly. Actions pins stay SHA-pinned: Dependabot
+# resolves the commit SHA itself and rewrites both the SHA and its trailing
+# human-tag comment, so the "never a mutable tag" rule in the workflows survives
+# automation.
+
+updates:
+  - package-ecosystem: npm
+    directory: /typescript
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      typescript:
+        patterns:
+          - '*'
+
+  # uv.lock is covered by the pip ecosystem.
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      python:
+        patterns:
+          - '*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: docker
+    directory: /docker/images/harness
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      docker:
+        patterns:
+          - '*'

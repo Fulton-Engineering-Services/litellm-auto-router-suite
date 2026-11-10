@@ -1,0 +1,234 @@
+name: Docker Release
+
+# Publishes the `harness` image to GHCR for this repository.
+#
+# Shape follows infra/bge-router's release workflow: compute tags once in `meta`,
+# build each architecture natively and push BY DIGEST, then merge the two digests
+# into one multi-arch manifest, then attest provenance against the merged digest.
+#
+# `docker/docker-bake.hcl` stays the single source of truth for what an image is:
+# the merge step drives bake itself, so adding the content plan's other seven images
+# means editing the bake file, not this workflow.
+#
+# Both cache planes from the design doc are exercised here:
+#   - GHA Actions cache (type=gha) per platform, on every build
+#   - GHCR registry cache (type=registry, mode=max) written by this main-branch
+#     build via REGISTRY_CACHE, which CI's PR builds never set
+#
+# Every `uses:` is pinned to a full commit SHA with the human tag in a trailing
+# comment. Dependabot (see .github/dependabot.yml) rewrites both together.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: docker-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/fulton-engineering-services/litellm-auto-router-suite
+  IMAGE_NAME: harness
+
+jobs:
+  # ── Tag and label computation ──────────────────────────────────────────
+  meta:
+    name: Meta
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tags.outputs.version }}
+      bake-tags: ${{ steps.tags.outputs.bake-tags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compute version and tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAGS="${VERSION},latest"
+          else
+            VERSION="${GITHUB_SHA::7}"
+            TAGS="latest"
+          fi
+          REPO="${IMAGE_BASE}/${IMAGE_NAME}"
+          {
+            printf 'version=%s\n' "$VERSION"
+            printf 'tags=%s\n' "$TAGS"
+            # Comma-separated list of fully-quoted tags; one per line for readability.
+            printf 'bake-tags='
+            IFS=',' read -ra parts <<< "$TAGS"
+            first=true
+            for t in "${parts[@]}"; do
+              if [ "$first" = true ]; then first=false; else printf ','; fi
+              printf '%s:%s' "$REPO" "$t"
+            done
+            printf '\n'
+          } >> "$GITHUB_OUTPUT"
+
+  # ── Per-architecture build, pushed by digest ───────────────────────────
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: [meta]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/images/harness/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          outputs: type=image,name=${{ env.IMAGE_BASE }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true
+          cache-from: |
+            type=gha,scope=release-${{ matrix.platform }}
+            type=registry,ref=${{ env.IMAGE_BASE }}/${{ env.IMAGE_NAME }}:buildcache-harness
+          cache-to: |
+            type=gha,scope=release-${{ matrix.platform }},mode=max
+            type=registry,ref=${{ env.IMAGE_BASE }}/${{ env.IMAGE_NAME }}:buildcache-harness,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+          labels: |
+            org.opencontainers.image.title=litellm-auto-router-suite-harness
+            org.opencontainers.image.description=Toolchain harness for the LiteLLM auto-router suite
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Merge digests into one multi-arch manifest ─────────────────────────
+  merge:
+    name: Merge multi-arch image
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge the two digests into one multi-arch image with bake
+        id: bake
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          BAKE_TAGS: ${{ needs.meta.outputs.bake-tags }}
+        run: |
+          set -euo pipefail
+          repo="${IMAGE_BASE}/${IMAGE_NAME}"
+          shopt -s nullglob
+          entries=(/tmp/digests/*)
+
+          # Both architectures must be present before a multi-arch tag is cut; a
+          # silently single-arch manifest is worse than a failed release.
+          if [ "${#entries[@]}" -lt 2 ]; then
+            printf '::error::expected 2 per-arch digests, found %s\n' "${#entries[@]}"
+            exit 1
+          fi
+
+          # One --set per list element. bake appends repeated --set for the same key
+          # but treats a comma-joined value as a SINGLE element, so the tags, the
+          # platforms and the cache-from entries each need their own --set. A single
+          # `*.platform=linux/amd64,linux/arm64` yields the one-element list
+          # ["linux/amd64,linux/arm64"] under `bake --print`, which is not two
+          # platforms. The digest refs need the sha256: prefix restored after
+          # ${entry##*/}, and the gha cache entry is repeated here because the first
+          # --set for a key replaces the list the bake file declares.
+          set_args=()
+          IFS=',' read -ra tags <<< "${BAKE_TAGS}"
+          for tag in "${tags[@]}"; do
+            set_args+=("--set=harness.tags=${tag}")
+          done
+          for entry in "${entries[@]}"; do
+            set_args+=("--set=harness.cache-from=type=registry,ref=${repo}@sha256:${entry##*/}")
+          done
+          set_args+=("--set=harness.cache-from=type=gha,scope=release-multiarch")
+          set_args+=("--set=*.platform=linux/amd64")
+          set_args+=("--set=*.platform=linux/arm64")
+          set_args+=("--set=harness.push=true")
+
+          # bake is the single source of truth for tags, platforms and cache policy:
+          # the content plan's other images land in the bake file, not here.
+          # REGISTRY_CACHE publishes the shared buildcache this build then reuses.
+          REGISTRY_CACHE="${repo}" TAG="${VERSION}" \
+            docker buildx bake -f docker/docker-bake.hcl \
+              --metadata-file /tmp/metadata.json \
+              "${set_args[@]}" \
+              harness
+
+          digest="$(jq -re '."harness"["containerimage.digest"]' /tmp/metadata.json)"
+          printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.bake.outputs.digest }}
+          push-to-registry: true

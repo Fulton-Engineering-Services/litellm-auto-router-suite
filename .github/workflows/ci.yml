@@ -1,0 +1,274 @@
+name: CI
+
+# One workflow, five job shapes, seven required check contexts:
+#
+#   TypeScript
+#   Python (3.12)   Python (3.13)
+#   Shell
+#   Bazel
+#   Docker (linux/amd64)   Docker (linux/arm64)
+#
+# Those context STRINGS are load-bearing, not cosmetic: the org-level ruleset
+# applied by scripts/setup-remote-repository.sh lists them verbatim under
+# required_status_checks. Renaming a job (or a matrix `name:`) without renaming
+# the matching ruleset context turns a required check into one that never
+# reports, which blocks every merge on main.
+#
+# Every `uses:` below is pinned to a full commit SHA with the human-readable tag
+# in a trailing comment. Never replace a SHA with a mutable tag: a tag can be
+# moved upstream, a commit cannot. Dependabot keeps the pins fresh (see
+# .github/dependabot.yml); it rewrites the SHA and the comment together.
+#
+# All jobs use GitHub-hosted runners. Nothing here pins to the org's single
+# self-hosted runner (gx10-9273), so no gate can be starved by that GPU box
+# being busy.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── TypeScript ─────────────────────────────────────────────────────────
+  # Gate order is codekeeper's: typecheck before lint, because `lint` itself
+  # runs `tsc -b` (oxlint runs type-aware) — a type error must surface as a
+  # typecheck failure, not as an opaque lint failure.
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ci-${{ github.ref }}-typescript
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `version:` — pnpm/action-setup reads `packageManager` from the
+      # workspace manifest, so the pnpm version has exactly one source of truth
+      # (typescript/package.json). `package_json_file` is required because the
+      # pnpm workspace root is typescript/, not the repo root.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: typescript/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm --dir typescript install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --dir typescript run typecheck
+
+      - name: Lint
+        run: pnpm --dir typescript run lint
+
+      - name: Lint TSDoc
+        run: pnpm --dir typescript run lint:tsdoc
+
+      - name: Test
+        run: pnpm --dir typescript run test:coverage
+
+      - name: Build
+        run: pnpm --dir typescript run build
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-typescript
+          path: typescript/coverage/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Python ─────────────────────────────────────────────────────────────
+  # The matrix `name:` is what makes the check context literally
+  # `Python (3.12)` / `Python (3.13)`.
+  #
+  # UV_PYTHON is uv's env-var form of `--python`. Without it the job would
+  # resolve the interpreter from python/.python-version (3.12) on both matrix
+  # legs and the 3.13 leg would silently test nothing new — the matrix would be
+  # decoration. It stays out of the gate commands so CI runs the exact same
+  # command lines as `bazel run //:check`.
+  python:
+    name: Python (${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ci-${{ github.ref }}-python-${{ matrix.python }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-path: python/uv.lock
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Unlike pnpm, a bare `uv sync` happily GENERATES a missing lockfile, so
+      # the missing-lockfile defect would pass unnoticed. Assert, then sync
+      # --frozen: never resolve in CI what nobody committed.
+      - name: Assert lockfile is committed
+        run: |
+          set -euo pipefail
+          if [ ! -f python/uv.lock ]; then
+            echo "::error::python/uv.lock is not committed. Run 'uv sync --directory python' locally and commit it; CI never generates lockfiles." >&2
+            exit 1
+          fi
+
+      - name: Sync environment
+        run: uv sync --directory python --frozen
+
+      - name: Ruff
+        run: uv run --directory python ruff check .
+
+      - name: Mypy
+        run: uv run --directory python mypy packages
+
+      - name: Pytest
+        run: uv run --directory python pytest
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-python-${{ matrix.python }}
+          path: python/htmlcov/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Shell ──────────────────────────────────────────────────────────────
+  # bash 3.2 + BSD coreutils is a supported target on contributor machines, so
+  # every script under scripts/ and docker/ is linted on every PR.
+  shell:
+    name: Shell
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ci-${{ github.ref }}-shell
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    env:
+      # actionlint is pinned by version AND asset digest; the tarball is
+      # checksum-verified before the binary is ever executed. Bumping the
+      # version means updating the digest in the same commit.
+      ACTIONLINT_VERSION: '1.7.12'
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # apt's shellcheck is not version-pinned (pinning to an exact apt version
+      # string rots the moment the Ubuntu mirror migrates a release); the exact
+      # version used is printed by the next step so a gate result is auditable.
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Report shellcheck version
+        run: shellcheck --version
+
+      - name: Shellcheck
+        run: ./scripts/lint-shell.sh --verbose
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" --version
+
+      - name: actionlint
+        run: |
+          "$RUNNER_TEMP/actionlint" -color
+
+  # ── Bazel ──────────────────────────────────────────────────────────────
+  # Bazel is a thin orchestrator: //:check is the same ordered gate sequence
+  # this workflow runs, so one local command proves the whole shell.
+  bazel:
+    name: Bazel
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ci-${{ github.ref }}-bazel
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No dedicated Bazel cache action: Bazel's own output base is the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ runner.os }}-${{ hashFiles('**/BUILD.bazel', 'MODULE.bazel', '.bazelrc', '.bazelversion') }}
+          restore-keys: |
+            bazel-${{ runner.os }}-
+
+      # Reads the Bazel version from .bazelversion.
+      - uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
+
+      - name: Build
+        run: bazel build //...
+
+      - name: Check
+        run: bazel run //:check
+
+  # ── Docker ─────────────────────────────────────────────────────────────
+  # Build-only. A pull_request run gets no registry credentials, and must not
+  # need any: this job proves the harness image builds for both architectures,
+  # publishing is docker-release.yml's job.
+  #
+  # arm64 runs natively on the free hosted arm64 label. If that label ever
+  # becomes unavailable, add docker/setup-buildx-action's companion
+  # docker/setup-qemu-action@... (see the pin table in the plan) to BOTH matrix
+  # legs and leave the matrix itself unchanged.
+  docker:
+    name: Docker (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    concurrency:
+      group: ci-${{ github.ref }}-docker-${{ matrix.platform }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ['linux/amd64', 'linux/arm64']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build harness image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/images/harness/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: false
+          tags: local/harness:${{ github.sha }}
+          cache-from: type=gha,scope=docker-${{ matrix.platform }}
+          cache-to: type=gha,scope=docker-${{ matrix.platform }},mode=max
