@@ -231,9 +231,15 @@ create_repo() {
     fi
 
     local body="$WORKDIR/create.json"
-    # HOMEPAGE defaults to "" and the API rejects an empty homepage as an invalid
-    # URL -- it failed the whole create with HTTP 422 -- so the key is dropped
-    # rather than sent blank or null.
+    # Two fields the first draft carried were rejected by the API itself:
+    #   homepage ""              -> not a valid URL
+    #   merge_commit_title/message together with allow_merge_commit:false ->
+    #     "Sorry, you need to allow the merge commit strategy in order to set the
+    #      default merge commit message title and message. (no_merge_strategy)"
+    # This repo deliberately disables merge commits (squash and rebase only), so
+    # the merge-commit message defaults describe a strategy that cannot run and are
+    # simply absent; the squash counterparts are kept because squash is enabled.
+    # HOMEPAGE is dropped rather than sent blank or null.
     jq -n \
         --arg name "$NAME" \
         --arg description "$DESCRIPTION" \
@@ -254,9 +260,7 @@ create_repo() {
             allow_update_branch: true,
             delete_branch_on_merge: true,
             squash_merge_commit_title: "PR_TITLE",
-            squash_merge_commit_message: "COMMIT_MESSAGES",
-            merge_commit_title: "MERGE_MESSAGE",
-            merge_commit_message: "PR_BODY"
+            squash_merge_commit_message: "COMMIT_MESSAGES"
         }
         | if $homepage == "" then del(.homepage) else . end' > "$body"
 
@@ -280,7 +284,14 @@ sync_repo_settings() {
     body="$WORKDIR/patch.json"
 
     # field:desired pairs. `true`/`false` stay unquoted via jq's boolean literals.
-    want='{"has_issues":true,"has_projects":false,"has_wiki":false,"has_discussions":false,"allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":true,"allow_auto_merge":false,"allow_update_branch":true,"delete_branch_on_merge":true,"web_commit_signoff_required":true,"squash_merge_commit_title":"PR_TITLE","squash_merge_commit_message":"COMMIT_MESSAGES","merge_commit_title":"MERGE_MESSAGE","merge_commit_message":"PR_BODY","description":'"$(json_escape "$DESCRIPTION")"',"homepage":'"$(json_escape "$HOMEPAGE")"'}'
+    # No merge_commit_title/merge_commit_message: the API refuses them while
+    # allow_merge_commit is false (see create_repo), so reconciling them here would
+    # fail the same way. No homepage either -- an empty one is rejected as an
+    # invalid URL, so it is only ever added when the operator supplied one.
+    want='{"has_issues":true,"has_projects":false,"has_wiki":false,"has_discussions":false,"allow_merge_commit":false,"allow_squash_merge":true,"allow_rebase_merge":true,"allow_auto_merge":false,"allow_update_branch":true,"delete_branch_on_merge":true,"web_commit_signoff_required":true,"squash_merge_commit_title":"PR_TITLE","squash_merge_commit_message":"COMMIT_MESSAGES","description":'"$(json_escape "$DESCRIPTION")"'}'
+    if [ -n "$HOMEPAGE" ]; then
+        want="$(jq -c --arg h "$HOMEPAGE" '. + {homepage: $h}' <<<"$want")"
+    fi
 
     current="$(gh api "repos/${REPO}" | jq -c '.')"
     patch_needed="$(jq -n --argjson want "$want" --argjson have "$current" '
