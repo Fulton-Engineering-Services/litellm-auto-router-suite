@@ -1,0 +1,23 @@
+[project]
+name = "fes-litellm-auto-router-suite"
+version = "0.1.0"
+description = "LiteLLM auto-router suite — shared Python primitives."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Fulton Engineering Services LLC", email = "contact@fultonengineeringservices.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fes_litellm_auto_router_suite"]

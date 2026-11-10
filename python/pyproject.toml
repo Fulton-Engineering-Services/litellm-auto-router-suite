@@ -1,0 +1,122 @@
+# Copyright 2026 Fulton Engineering Services LLC
+#
+# Licensed under Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with License.
+# You may obtain copy License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required applicable law or agreed in writing, software
+# distributed under License distributed on "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See License specific language governing permissions and
+# limitations under License.
+
+# uv workspace root. There is deliberately no [project] table: this root is a
+# virtual project, and distribution metadata belongs to the workspace members
+# under packages/. Tool configuration (ruff, mypy, pytest, coverage) lives
+# here so every member shares one gate stack.
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.4",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff — lint + format
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+include = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py"]
+exclude = [".venv", "dist", "build", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "PTH",   # flake8-use-pathlib
+    "RUF",   # ruff-specific
+    "ASYNC", # flake8-async
+    "TID",   # flake8-tidy-imports
+    "PL",    # pylint
+    "S",     # flake8-bandit (security)
+]
+ignore = [
+    "PLC0415", # guarded / lazy imports are intentional
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fes_litellm_auto_router_suite"]
+
+[tool.ruff.lint.per-file-ignores]
+# Same shape as [tool.ruff].include: tests live at packages/*/tests/, so a bare
+# "tests/**" pattern would match nothing and S101 would fire on every assert.
+"packages/*/tests/**" = [
+    "S101", # asserts are fine in tests
+    "S108", # /tmp paths acceptable in test helpers
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# mypy — strict type checking
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "packages/fes_litellm_auto_router_suite/src"
+strict = true
+ignore_missing_imports = true
+exclude = []
+
+[[tool.mypy.overrides]]
+# Tests are allowed looser typing than shipped code: fixtures and assertion
+# helpers do not benefit from full annotation discipline.
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_unused_ignores = false
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+addopts = [
+    "--cov=fes_litellm_auto_router_suite",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=85",
+    "-q",
+]
+
+[tool.coverage.run]
+source = ["fes_litellm_auto_router_suite"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "@overload",
+]
