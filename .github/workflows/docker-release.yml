@@ -164,6 +164,16 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
+      # The merge re-runs bake for BOTH platforms on this amd64 runner. The pushed
+      # digests are the cache-from, so the arm64 stages normally resolve from cache
+      # and nothing executes; but any arm64 step that misses would need binfmt to
+      # run, and without it the build dies with "exec format error". Registering
+      # both architectures makes the merge correct rather than merely lucky.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: linux/amd64,linux/arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
