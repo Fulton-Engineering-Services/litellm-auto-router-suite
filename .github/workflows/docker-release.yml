@@ -29,6 +29,11 @@ permissions:
   attestations: write
   id-token: write
   packages: write
+  # Separate scope from `attestations: write`. The attest step persists a
+  # storage record through the artifact-metadata API in addition to pushing the
+  # provenance statement; without this the step still ends green but warns
+  # "Failed to persist storage record: no artifacts found".
+  artifact-metadata: write
 
 concurrency:
   group: docker-release-${{ github.ref }}
@@ -157,11 +162,14 @@ jobs:
       contents: read
       packages: write
       # A job-level `permissions:` block REPLACES the workflow-level one, it does
-      # not extend it. Attest needs both of these; inheriting them from the
-      # workflow header would silently omit them and the attestation step would
-      # fail with "Resource not accessible by integration".
+      # not extend it, so everything the attestation needs is spelled out here.
+      # `attestations: write` + `id-token: write` let the step sign the provenance
+      # statement and push it; `artifact-metadata: write` is the separate scope
+      # the backing storage record requires -- its absence is a warning, not a
+      # failure, which is how it went unnoticed.
       attestations: write
       id-token: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
