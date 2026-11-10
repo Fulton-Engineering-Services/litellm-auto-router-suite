@@ -21,7 +21,7 @@
     "lint:tsdoc:fix": "eslint --cache --fix \"packages/*/src/**/*.ts\""
   },
   "devDependencies": {
-    "@types/node": "^22.20.0",
+    "@types/node": "^26.6.6",
     "@typescript-eslint/parser": "^8.72.2",
     "@vitest/coverage-v8": "^5.1.0",
     "eslint": "^10.14.0",
@@ -31,7 +31,7 @@
     "oxlint": "1.93.0",
     "oxlint-tsgolint": "7.0.2006",
     "prettier": "^3.9.10",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }
 }
