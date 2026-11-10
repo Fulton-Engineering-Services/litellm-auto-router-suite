@@ -30,7 +30,10 @@ pre-push:
     - name: typecheck
       run: pnpm --dir typescript run typecheck
     - name: tsdoc lint
-      # Runs from the git root, so the config path and the file glob are both
-      # repo-relative; ESLint resolves the config's own `files` patterns
-      # relative to typescript/, matching `pnpm --dir typescript run lint:tsdoc`.
-      run: typescript/node_modules/.bin/eslint --config typescript/eslint.config.mjs --cache --no-warn-ignored 'typescript/packages/*/src/**/*.ts'
+      # Delegates to the workspace script rather than calling eslint directly from
+      # the git root. The direct form died with "all of the files matching the glob
+      # pattern are ignored": ESLint matches a config's `files` patterns against
+      # paths relative to the config's own directory, so repo-relative
+      # typescript/packages/... never matches typescript/eslint.config.mjs's
+      # packages/**/*.ts. Same command the CI gate runs, so hook and CI cannot drift.
+      run: pnpm --dir typescript run lint:tsdoc
