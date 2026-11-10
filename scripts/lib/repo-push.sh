@@ -84,7 +84,9 @@ preflight() {
     if [ -n "$untracked" ]; then
         log_warn "untracked file(s) present, never published: $(printf '%s' "$untracked" | paste -sd, -)"
     fi
-    log_success "worktree matches HEAD on main ($(git rev-parse --short HEAD))"
+    # Names the branch it actually checked: under --dry-run this is a feature
+    # branch, and claiming "main" there made the pass look like a lie.
+    log_success "worktree matches HEAD on '${branch}' ($(git rev-parse --short HEAD))"
 
     # The configured url is the only honest existence probe. `git remote get-url
     # origin` succeeds and prints the bare word "origin" for a [remote "origin"]

@@ -63,7 +63,7 @@ apply_ruleset() {
 
     case "$action" in
         noop)
-            log_success "ruleset '${NAME} Branch Protection}' (id ${existing_id}) already matches; no write"
+            log_success "ruleset '${NAME} Branch Protection' (id ${existing_id}) already matches; no write"
             ;;
         update)
             # Update in place. PUT is the verb these endpoints honor: measured 200
@@ -77,13 +77,13 @@ apply_ruleset() {
             # this script churned the ruleset id (26910111 -> 26911541 -> 26911762)
             # even when the definition had not changed.
             log_step "ruleset exists (id ${existing_id}); updating it in place"
-            confirm "update org ruleset '${NAME} Branch Protection}'"
+            confirm "update org ruleset '${NAME} Branch Protection'"
             if ! write_api PUT "/orgs/${ORG}/rulesets/${existing_id}" "$body"; then
                 die "could not update ruleset ${existing_id} — ${NAME} is still running the previous definition. Re-run this script to retry. Unlike the old recreate path, a failure here cannot leave the repository unprotected."
             fi
             ;;
         create)
-            confirm "create org ruleset '${NAME} Branch Protection}'"
+            confirm "create org ruleset '${NAME} Branch Protection'"
             write_api POST "/orgs/${ORG}/rulesets" "$body"
             ;;
     esac
