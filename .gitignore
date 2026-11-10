@@ -4,6 +4,11 @@
 # Agent session scratch (plans, captures)
 .omp/
 
+# Git worktrees: one per unit of work, under the repo root. Without this the
+# parent repo sees a whole nested checkout as untracked content and a stray
+# `git add -A` stages an entire second copy of the tree.
+.git-worktrees/
+
 # Python
 __pycache__/
 *.py[cod]
