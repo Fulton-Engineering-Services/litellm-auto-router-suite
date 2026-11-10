@@ -1,0 +1,17 @@
+{
+  "name": "@fulton-engineering-services/litellm-auto-router-suite-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib/"
+  ]
+}

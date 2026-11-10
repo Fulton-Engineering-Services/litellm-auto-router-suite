@@ -1,0 +1,9 @@
+node_modules/
+lib/
+lib-tests/
+dist/
+coverage/
+htmlcov/
+*.tsbuildinfo
+pnpm-lock.yaml
+.eslintcache
