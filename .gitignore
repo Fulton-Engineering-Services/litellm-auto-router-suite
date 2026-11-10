@@ -1,1 +1,69 @@
+# Design notes (local planning artifacts)
 .design
+
+# Agent session scratch (plans, captures)
+.omp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+build/
+.eggs/
+MANIFEST
+python/.venv/
+python/uv.lock.bak
+
+# uv / tool caches
+.uv/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+htmlcov/
+.coverage
+.tox/
+.nox/
+
+# Node
+node_modules/
+.pnpm-store/
+pnpm-debug.log
+*.tsbuildinfo
+
+# Build output
+dist/
+lib/
+lib-tests/
+out/
+coverage/
+
+# Bazel
+/bazel-bin
+/bazel-out
+/bazel-testlogs
+/bazel-litellm-auto-router-suite
+/.bazelrc.user
+
+# Docker
+docker/dist/
+
+# Environment
+.env
+.env.local
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+*.log
+
+# Hooks / caches
+.eslintcache
+.cache/

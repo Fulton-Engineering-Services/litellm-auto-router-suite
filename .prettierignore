@@ -1,0 +1,11 @@
+node_modules/
+lib/
+lib-tests/
+dist/
+coverage/
+htmlcov/
+.venv/
+python/uv.lock
+pnpm-lock.yaml
+*.pb.go
+.design/
