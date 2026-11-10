@@ -204,11 +204,22 @@ preflight() {
     branch="$(git rev-parse --abbrev-ref HEAD)"
     [ "$branch" = main ] || die "HEAD is on '${branch}', expected 'main'"
 
-    if [ -n "$(git status --porcelain)" ]; then
+    # Tracked content compared by bytes, not by git's cached stat info. The
+    # pre-commit formatter rewrites files it touches, and a rewrite whose bytes are
+    # identical can still leave `git status` reporting " M" until the stat cache is
+    # refreshed -- which refused to publish a tree that was provably identical to
+    # HEAD (git diff and git diff --cached both empty; the very next git status was
+    # clean). What gets published is tracked content, so that is what is checked.
+    if ! git diff --quiet HEAD --; then
         git status --short
-        die "worktree is not clean — commit or stash before publishing"
+        die "tracked files differ from HEAD — commit or stash before publishing"
     fi
-    log_success "worktree clean on main ($(git rev-parse --short HEAD))"
+    local untracked
+    untracked="$(git ls-files --others --exclude-standard)"
+    if [ -n "$untracked" ]; then
+        log_warn "untracked file(s) present, never published: $(printf '%s' "$untracked" | paste -sd, -)"
+    fi
+    log_success "worktree matches HEAD on main ($(git rev-parse --short HEAD))"
 
     # The configured url is the only honest existence probe. `git remote get-url
     # origin` succeeds and prints the bare word "origin" for a [remote "origin"]
