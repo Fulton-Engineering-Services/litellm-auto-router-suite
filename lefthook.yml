@@ -1,0 +1,36 @@
+# Lefthook configuration - litellm-auto-router-suite
+#
+# Lefthook resolves its config from the git root, so this file lives at the repo
+# root even though the hook binaries are installed by the pnpm workspace under
+# typescript/. Every tool path therefore points at typescript/node_modules/.bin/
+# and every pnpm invocation uses `pnpm --dir typescript`.
+#
+# Toolchain install: pnpm --dir typescript exec lefthook install
+# (scripts/setup-project-toolchain.sh runs it for you).
+
+pre-commit:
+  jobs:
+    - name: format (staged)
+      glob: '*.{ts,json,yml,yaml,md}'
+      run: typescript/node_modules/.bin/prettier --write --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    - name: lint (staged)
+      glob: '*.ts'
+      run: typescript/node_modules/.bin/oxlint --fix --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    - name: whitespace (staged)
+      run: git diff --cached --check
+    - name: hygiene (staged)
+      # Merge-conflict markers and trailing whitespace, over the staged set
+      # (with no arguments this script reads `git diff --cached` itself).
+      run: scripts/check-hygiene.sh
+
+pre-push:
+  jobs:
+    - name: typecheck
+      run: pnpm --dir typescript run typecheck
+    - name: tsdoc lint
+      # Runs from the git root, so the config path and the file glob are both
+      # repo-relative; ESLint resolves the config's own `files` patterns
+      # relative to typescript/, matching `pnpm --dir typescript run lint:tsdoc`.
+      run: typescript/node_modules/.bin/eslint --config typescript/eslint.config.mjs --cache --no-warn-ignored 'typescript/packages/*/src/**/*.ts'
