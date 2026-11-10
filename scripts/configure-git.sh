@@ -299,9 +299,15 @@ configure_git() {
     git config push.autoSetupRemote true
     log_success "Set push.autoSetupRemote true"
 
-    # Global so re-clones inherit it: release tags are re-pointed deliberately.
-    git config --global remote.origin.tagopt --force
-    log_success "Set remote.origin.tagopt to --force (global)"
+    # Repo-local, unlike the neighbouring push.* settings which are deliberately
+    # global. remote.origin.tagopt is keyed on the remote NAME, so a --global copy
+    # would disable tag-update protection for every repository on the workstation
+    # that happens to have an origin -- silently overwriting a local tag the first
+    # time a fetch sees a remote tag of the same name. This repo re-points release
+    # tags deliberately; no other repo is being opted in. Re-clones get it by
+    # running this script, which is the operators' entry point anyway.
+    git config --local remote.origin.tagopt --force
+    log_success "Set remote.origin.tagopt to --force (local)"
 
     configure_credential_helper
 }
